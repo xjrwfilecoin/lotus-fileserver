@@ -116,8 +116,8 @@ impl From<&Vec<u8>> for FileInfo {
 }
 
 
-pub fn start_server(parent_path: std::path::PathBuf) {
-    let listener = TcpListener::bind("0.0.0.0:8081").unwrap();
+pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
+    let listener = TcpListener::bind(host).unwrap();
     //  let mut incoming = listener.incoming();
 
     let total_threads = Arc::new(Mutex::new(0));
@@ -335,7 +335,7 @@ mod Test {
 
 
         let t1 = thread::spawn(||{
-            start_server(PathBuf::from("/mnt/data/server"));
+            start_server("0.0.0.0:8081",PathBuf::from("/mnt/data/server"));
         });
         let t2 = thread::spawn(||{
             start_upload(String::from("localhost:8081"),&PathBuf::from("/mnt/ssd/bench/cache/s-t01000-1/sc-02-data-tree-c-1.dat"),&PathBuf::from("s-t01000-1/sc-02-data-tree-c-1.dat"));
