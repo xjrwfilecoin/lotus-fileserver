@@ -11,6 +11,9 @@
     
     // 进入项目目录
     cd lotus-fileserver
+    
+    // 切换分支dev1, git log可以确认下
+    git checkout -b dev1 origin/dev1
    
     // 编译
     cargo build --release --package server
