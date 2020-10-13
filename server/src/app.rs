@@ -17,7 +17,7 @@ impl Application {
                 .wrap(auth_middleware::CheckLogin)
                 .data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
                 .service(web::resource("/ping").route(web::get().to(sector_handler::ping_handler)))
-                .service(web::resource("/sectorNotify").route(web::post().to(sector_handler::sector_notify_handler)))
+                .service(web::resource("/uploadFile").route(web::post().to(sector_handler::upload_file_handler)))
         })
             .bind("127.0.0.1:9999")?
             .run()

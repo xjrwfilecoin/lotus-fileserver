@@ -5,14 +5,13 @@ use crate::model::model::Status;
 use crate::service::sector_service::SectorService;
 use log::info;
 
-pub async fn ping_handler(req_body: String) -> impl Responder {
+pub async fn ping_handler(req_body: String) -> HttpResponse {
     HttpResponse::Ok().body(format!("pong: lotus-file-client receive ping \n --(0_0)-- \n"))
 }
 
-
 pub async fn sector_notify_handler(item: web::Json<SectorNotifyForm>) -> HttpResponse {
     println!("xjrw:{:?}", &item);
-    // todo 传输文件
+    // todo start transfer file
     let word_service = SectorService::new();
     match word_service {
         Ok(service) => {

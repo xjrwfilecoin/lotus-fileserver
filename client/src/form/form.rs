@@ -4,4 +4,5 @@ use serde::{Deserialize, Serialize};
 pub struct SectorNotifyForm {
     pub filename: String,
     pub sector_id: String,
+    pub file_length: i64,
 }
