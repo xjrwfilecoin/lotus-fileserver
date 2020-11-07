@@ -120,6 +120,8 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
     let listener = TcpListener::bind(host).unwrap();
     //  let mut incoming = listener.incoming();
 
+    let limit_sleep_ms = get_limit_sleep();
+
     let total_threads = Arc::new(Mutex::new(0));
     for stream in listener.incoming() {
         let parent_path = parent_path.clone();
@@ -144,7 +146,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                     match reader.read(&mut buffer[cur_read_offset..1024]) {
                         Ok(read_size) => {
                             if read_size == 0 {
-                                return Err(anyhow!("socket closed"));
+                                return Err(anyhow!("socket read end"));
                             } else {
                                 if cur_read_offset + read_size >= 1024 {
                                     return Ok(FileInfo::from(&buffer[..1024]));
@@ -154,7 +156,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                             }
                         }
                         Err(e) => {
-                            return Err(anyhow!("error in write file :{}", e.to_string()));
+                            return Err(anyhow!("error read failed :{}", e.to_string()));
                         }
                     }
                 }
@@ -162,14 +164,17 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
             };
             match read_head() {
                 Ok(file_info) => {
+
                     let file_name =  parent_path.join(file_info.file_name);
-                    Command::new("mkdir")
-                        .arg("-p")
-                        .arg(&file_name.parent().unwrap().to_str().unwrap())
-                        .output()
-                        .expect("failed to create cache path");
+                    if !std::path::Path::exists(file_name.parent().unwrap()) {
+                        Command::new("mkdir")
+                            .arg("-p")
+                            .arg(&file_name.parent().unwrap().to_str().unwrap())
+                            .output()
+                            .expect(format!("failed to create cache path,{}",&file_name.parent().unwrap().to_str().unwrap()).as_str());
+                    }
                     let mut open_option = OpenOptions::new();
-                    if let Ok(mut file) = open_option.write(true).create(true).open(parent_path.join(&file_name)) {
+                    if let Ok(mut file) = open_option.write(true).create(true).open(&file_name) {
                         let mut buffer = vec![0u8; buf_len];
                         let mut cur_read_offset = 0usize;
 
@@ -223,7 +228,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                                                     let mut cnts = total_threads.lock().unwrap();
                                                     *cnts.deref_mut()
                                                 };
-                                                thread::sleep(std::time::Duration::from_millis(400 * cnts as u64));
+                                                thread::sleep(std::time::Duration::from_millis(limit_sleep_ms * cnts as u64));
                                                 //file.sync_data();
                                             }
                                             Err(e) => {
@@ -261,8 +266,27 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
     }
 }
 
+fn get_limit_sleep() -> u64 {
+    let limit_sleep_ms = match std::env::var("FIL_TRANS_SLEEP")
+    {
+        Ok(ms) => {
+            match ms.parse::<u64>() {
+                Ok(v) => v,
+                Err(_e) => {
+                    400u64
+                }
+            }
+        },
+        Err(_e) => {
+            400u64
+        }
+    };
+    limit_sleep_ms
+}
+
 pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf) {
     let mut buffer = vec![0u8; 64 * 1024 * 1024];
+    let limit_sleep_ms = get_limit_sleep();
     println!("connecting to {}",&dest);
     if let Ok(stream) = TcpStream::connect(&dest) {
         let (reader, writer) = &mut (&stream, &stream);
@@ -283,7 +307,7 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
                                     } else {
                                         match writer.write_all(&buffer[0..read_size]) {
                                             Ok(_) => {
-                                                thread::sleep(Duration::from_millis(200));
+                                                thread::sleep(Duration::from_millis(limit_sleep_ms));
                                             }
                                             Err(e) => {
                                                 error!("error in write stream:{}", e.to_string())

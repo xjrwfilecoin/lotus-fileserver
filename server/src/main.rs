@@ -9,11 +9,13 @@ use std::env;
 
 fn main() {
     env_logger::init();
-    info!("start qfiletrans server ...");
-    let args: Vec<String> = env::args().collect();
 
-    // let mut host = "0.0.0.0:8081";
-    // let mut server_path = "/mnt/data/server";
+    info!("start qfiletrans server ...");
+
+    let host = match env::args().nth(1){
+        Some(h) => h,
+        None=> "0.0.0.0:8081".to_owned()
+    };
 
     let work_path = env::var("WORKER_PATH").expect("please config WORKER_PATH env value ");
 
@@ -22,13 +24,9 @@ fn main() {
         return;
     }
 
-    if args.len() < 2 {
-        error!("host address no find,please config host address");
-        return;
-    }
-    info!("host {:?},worker_path {:?}", args[1], work_path);
+    info!("worker_path {}, start on:{}", work_path,host);
     let t1 = thread::spawn(move || {
-        start_server(args[1].as_str(), PathBuf::from(work_path));
+        start_server(host.as_str(),PathBuf::from(work_path));
     });
     t1.join().unwrap();
 }
