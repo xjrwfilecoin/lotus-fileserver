@@ -20,12 +20,12 @@ use thread_priority::*;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use async_std::task;
 
 use std::thread;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Add};
 use anyhow::{*};
 use structopt::StructOpt;
 use rand::prelude::*;
@@ -121,22 +121,65 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
     //  let mut incoming = listener.incoming();
 
     let limit_sleep_ms = get_limit_sleep();
-
+    log::info!("listen on:{},root:{}",host,parent_path.clone().to_str().unwrap());
     let total_threads = Arc::new(Mutex::new(0));
     for stream in listener.incoming() {
         let parent_path = parent_path.clone();
         let total_threads = total_threads.clone();
+
+        let state = Arc::new(RwLock::new(0u64));
+        let state_read = state.clone();
+        thread::spawn(move ||{
+            let mut offset = 0u64;
+            let mut step = 0u8;
+            loop {
+                thread::sleep(Duration::from_millis(200));
+                {
+                    let st = state_read.read().unwrap();
+                    if *st == u64::max_value() {
+                        break;
+                    }
+                    if step % 5 == 4 {
+                        let mut s = (*st - offset) as f64 / 1024.0f64;
+                        let mut u = "KiB";
+                        if s > 1024f64 {
+                            u = "MiB";
+                            s = s / 1024.0;
+                        }
+                        if s > 1024f64 {
+                            u = "GiB";
+                            s = s / 1024.0;
+                        }
+                        log::trace!("speed: {}{}/s",s.ceil(),u);
+                        offset = *st;
+                        step = 0;
+                    }
+                }
+                step += 1;
+            }
+        });
+        let add_len=move |len:usize| {
+            let mut st = state.write().unwrap();
+            if len > 0 {
+                *st += len as u64;
+            }
+            else{
+                *st = u64::max_value();
+            }
+        };
         thread::spawn(move || {
             {
                 let mut cnts = total_threads.lock().unwrap();
                 let cnts = cnts.deref_mut();
                 *cnts += 1;
+                log::trace!("incoming...all :{} thr",&cnts);
             }
 
             let set_res = set_current_thread_priority(ThreadPriority::Min);
             if !set_res.is_ok()  {
                 info!("set store thread priority failed: {:?}", set_res.unwrap_err())
             }
+
             let stream = stream.unwrap();
             let (reader, writer) = &mut (&stream, &stream);
             let mut read_head = || -> Result<FileInfo>{
@@ -166,6 +209,20 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                 Ok(file_info) => {
 
                     let file_name =  parent_path.join(file_info.file_name);
+                    let handler= reader.read_u8().unwrap();
+                    if handler == 1 {
+                        if let Err(e) = std::fs::remove_dir_all(file_name.parent().unwrap()){
+                            log::error!("remove_dir all,[{}]-->failed:{:?}",file_name.parent().unwrap().to_str().unwrap(),e);
+                        }
+                        else{
+                            let file_txt = format!("{}.txt",file_name.parent().unwrap().to_str().unwrap());
+                            log::warn!("remove file:{}",file_txt);
+                            std::fs::remove_file(file_txt).unwrap();
+                            log::warn!("dir:[{}] removed",file_name.parent().unwrap().to_str().unwrap());
+                        };
+                        add_len(0);//结束标志
+                        return;
+                    }
                     if !std::path::Path::exists(file_name.parent().unwrap()) {
                         Command::new("mkdir")
                             .arg("-p")
@@ -178,11 +235,14 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                         let mut buffer = vec![0u8; buf_len];
                         let mut cur_read_offset = 0usize;
 
-                        file.set_len(file_info.file_len);
+                        let file_len = file_info.file_len;
+                        file.set_len(file_len);
+
                         let mut file_len = 0u64;
                         loop {
                             match reader.read(&mut buffer[cur_read_offset..buf_len]) {
                                 Ok(read_size) => {
+                                    add_len(read_size);
                                     file_len += read_size as u64;
                                     if read_size == 0 {
                                         info!("read finished!");
@@ -261,6 +321,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                 if *cnts > 0 {
                     *cnts -= 1;
                 }
+                add_len(0);
             }
         });
     }
@@ -284,12 +345,34 @@ fn get_limit_sleep() -> u64 {
     limit_sleep_ms
 }
 
+///remove remote file
+pub fn start_remove(dest: String,cut_file_name: &std::path::PathBuf) {
+    // let remove = vec![0u8;32];
+    if let Ok(stream) = TcpStream::connect(&dest) {
+        let (_reader, writer) = &mut (&stream, &stream);
+        let file_info = FileInfo::new(32,String::from(cut_file_name.to_str().unwrap() ));
+        match writer.write_all(&(&file_info).to_vec()[..]) {
+            Ok(_)=>{
+                if let Err(e) = writer.write_u8(1u8){//协议行为标识--删除
+                    error!("error in write stream:{}", e.to_string())
+                };
+            },
+            Err(e)=>{
+                error!("error in write stream:{}", e.to_string())
+            }
+        }
+    }
+    else{
+        println!("error in connecting to {}",&dest);
+    }
+}
+
 pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf) {
     let mut buffer = vec![0u8; 64 * 1024 * 1024];
     let limit_sleep_ms = get_limit_sleep();
-    println!("connecting to {}",&dest);
+    info!("connecting to {}",&dest);
     if let Ok(stream) = TcpStream::connect(&dest) {
-        let (reader, writer) = &mut (&stream, &stream);
+        let (_reader, writer) = &mut (&stream, &stream);
         let mut open_option = OpenOptions::new();
 
         match open_option.read(true).open(&real_file) {
@@ -298,6 +381,7 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
                 let file_info = FileInfo::new(file.metadata().unwrap().len(),String::from(cut_file_name.to_str().unwrap() ));
                 match writer.write_all(&(&file_info).to_vec()[..]) {
                     Ok(_) =>{
+                        writer.write_u8(0u8).unwrap();//协议行为标识--上传
                         loop {
                             match file.read(&mut buffer[..]) {
                                 Ok(read_size) => {
@@ -307,7 +391,7 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
                                     } else {
                                         match writer.write_all(&buffer[0..read_size]) {
                                             Ok(_) => {
-                                                thread::sleep(Duration::from_millis(limit_sleep_ms));
+                                                // thread::sleep(Duration::from_millis(limit_sleep_ms));
                                             }
                                             Err(e) => {
                                                 error!("error in write stream:{}", e.to_string())
@@ -349,21 +433,26 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
 
 #[cfg(test)]
 mod Test {
-    use crate::{start_server,start_upload,FileInfo};
+    use crate::{start_server,start_upload,FileInfo,start_remove};
     use std::path::PathBuf;
     use std::thread;
     #[test]
     fn test_FileInfo() {
+        env_logger::init();
         let file_info = FileInfo::new(2 * 1024 * 1024, String::from("thies is a test/with path/filename is.txt"));
         let result = file_info.to_vec();
 
 
         let t1 = thread::spawn(||{
-            start_server("0.0.0.0:8081",PathBuf::from("/mnt/data/server"));
+            start_server("0.0.0.0:28081",PathBuf::from(r"c:\tools\upload"));
         });
         let t2 = thread::spawn(||{
-            start_upload(String::from("localhost:8081"),&PathBuf::from("/mnt/ssd/bench/cache/s-t01000-1/sc-02-data-tree-c-1.dat"),&PathBuf::from("s-t01000-1/sc-02-data-tree-c-1.dat"));
+            start_upload(String::from("localhost:28081"),&PathBuf::from(r"c:\projects\sources_prod.tar"),&PathBuf::from(r"s-t01000-1\sources_prod.tar"));
+            start_remove(String::from("localhost:28081"),&PathBuf::from(r"s-t01000-1\sources_prod.tar"));
         });
+        // let t2 = thread::spawn(||{
+        //     start_remove(String::from("localhost:28081"),&PathBuf::from(r"s-t01000-1\lotus-master.tar"));
+        // });
         t2.join();
         t1.join();
     }
