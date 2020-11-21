@@ -217,8 +217,17 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                         else{
                             let file_txt = format!("{}.txt",file_name.parent().unwrap().to_str().unwrap());
                             log::warn!("remove file:{}",file_txt);
-                            std::fs::remove_file(file_txt).unwrap();
+                            if let Err(e) = std::fs::remove_file(file_txt) {
+                                log::error!("remove file [{}] failed",file_txt);
+                            };
                             log::warn!("dir:[{}] removed",file_name.parent().unwrap().to_str().unwrap());
+                            if let Ok(path) = std::env::var("WORKER_PATH") {
+                                let sealed_path = PathBuf::from(path).join("sealed");
+                                let name = file_name.parent().unwrap().file_name().unwrap().to_str().unwrap();
+                                if let Err(e) = std::fs::remove_file(sealed_path.join(name)){
+                                    log::error!("remove file [{}/{}] failed",sealed_path.to_str().unwrap(),name);
+                                };
+                            };
                         };
                         add_len(0);//结束标志
                         return;
