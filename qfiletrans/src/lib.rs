@@ -217,7 +217,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                         else{
                             let file_txt = format!("{}.txt",file_name.parent().unwrap().to_str().unwrap());
                             log::warn!("remove file:{}",file_txt);
-                            if let Err(e) = std::fs::remove_file(file_txt) {
+                            if let Err(e) = std::fs::remove_file(file_txt.clone()) {
                                 log::error!("remove file [{}] failed",file_txt);
                             };
                             log::warn!("dir:[{}] removed",file_name.parent().unwrap().to_str().unwrap());
