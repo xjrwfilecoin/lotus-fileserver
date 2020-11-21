@@ -357,22 +357,64 @@ fn get_limit_sleep() -> u64 {
 ///remove remote file
 pub fn start_remove(dest: String,cut_file_name: &std::path::PathBuf) {
     // let remove = vec![0u8;32];
-    if let Ok(stream) = TcpStream::connect(&dest) {
-        let (_reader, writer) = &mut (&stream, &stream);
-        let file_info = FileInfo::new(32,String::from(cut_file_name.to_str().unwrap() ));
-        match writer.write_all(&(&file_info).to_vec()[..]) {
-            Ok(_)=>{
-                if let Err(e) = writer.write_u8(1u8){//协议行为标识--删除
-                    error!("error in write stream:{}", e.to_string())
-                };
-            },
-            Err(e)=>{
-                error!("error in write stream:{}", e.to_string())
+    match TcpStream::connect(&dest) {
+        Ok(stream)=>{
+            let (_reader, writer) = &mut (&stream, &stream);
+            let file_info = FileInfo::new(32,String::from(cut_file_name.to_str().unwrap() ));
+            match writer.write_all(&(&file_info).to_vec()[..]) {
+                Ok(_)=>{
+                    if let Err(e) = writer.write_u8(1u8){//协议行为标识--删除
+                        error!("error in write stream:{}", e.to_string());
+                    };
+                },
+                Err(e)=>{
+                    error!("error in write stream:{}", e.to_string());
+                }
             }
+        },
+        Err(e) =>{
+            log::warn!("error in connecting to {},error:{}",&dest,e.to_string());
+            if let Ok(_) = start_remove_retry(dest,cut_file_name,1){
+                log::info!("start_remove_retry OK");
+            };
         }
     }
-    else{
-        println!("error in connecting to {}",&dest);
+}
+
+fn start_remove_retry(dest: String,cut_file_name: &std::path::PathBuf,retry:u32) -> Result<()>{
+    match TcpStream::connect(&dest) {
+        Ok(stream)=>{
+            let (_reader, writer) = &mut (&stream, &stream);
+            let file_info = FileInfo::new(32,String::from(cut_file_name.to_str().unwrap() ));
+            match writer.write_all(&(&file_info).to_vec()[..]) {
+                Ok(_)=>{
+                    if let Err(e) = writer.write_u8(1u8){//协议行为标识--删除
+                        error!("error in write stream:{}", e.to_string());
+                    };
+                    Ok(())
+                },
+                Err(e)=>{
+                    error!("error in write stream:{}", e.to_string());
+                    Ok(())
+                }
+            }
+        },
+        Err(e) =>{
+            if retry < 10 {
+                let dest = dest.clone();
+                let cut_file_name = cut_file_name.clone();
+                thread::spawn(move||{
+                    thread::sleep(Duration::from_secs(30));
+                    if let Err(e) = start_remove_retry(dest.clone(),&cut_file_name,retry + 1){
+
+                    };
+                });
+            }
+            else{
+                log::error!("error in connecting to {},error:{}",&dest,e.to_string());
+            }
+            Err(anyhow!("error in connecting to {},error:{}",&dest,e.to_string()))
+        }
     }
 }
 
