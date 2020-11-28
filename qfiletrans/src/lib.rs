@@ -53,6 +53,8 @@ struct Cli {
 
 const buf_len: usize = 200 as usize * 1024 * 1024;
 
+
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct FileInfo {
     file_len: u64,
@@ -417,7 +419,25 @@ fn start_remove_retry(dest: String,cut_file_name: &std::path::PathBuf,retry:u32)
         }
     }
 }
-
+// pub fn start_upload_async(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf,sector_id:&str){
+//     thread::spawn(move||{
+//         let f_his = PathBuf::from(format!("./{}.his", sector_id));
+//         let n = std::time::Instant::now();
+//
+//         start_upload(dest,real_file,&cut_file_name.clone());
+//         if let Ok(mut his) = std::fs::OpenOptions::new().append(true).create(true).open(f_his) {
+//             //记录文件传输耗时日志
+//             let mut ss = n.elapsed().as_secs();
+//             let mut mm = 0;
+//             if ss > 60 {
+//                 mm = ss / 60;
+//                 ss = ss % 60;
+//             }
+//             let line = format!("[{}:{}] scp {} {}:{}\r\n", mm, ss, real_file.to_str().unwrap(), cut_file_name.clone().to_str().unwrap(), dest);
+//             his.write(line.as_bytes()).unwrap();
+//         }
+//     });
+// }
 pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf) {
     let mut buffer = vec![0u8; 64 * 1024 * 1024];
     let limit_sleep_ms = get_limit_sleep();
