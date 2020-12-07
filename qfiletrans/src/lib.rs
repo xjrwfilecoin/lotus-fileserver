@@ -438,10 +438,25 @@ fn start_remove_retry(dest: String,cut_file_name: &std::path::PathBuf,retry:u32)
 //         }
 //     });
 // }
-pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf) {
+
+pub fn start_upload_inner(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf,retry:u32){
     let mut buffer = vec![0u8; 64 * 1024 * 1024];
-    let limit_sleep_ms = get_limit_sleep();
+    // let limit_sleep_ms = get_limit_sleep();
     info!("connecting to {}",&dest);
+
+    let retry = retry + 1;
+    let do_retry = || {
+        if retry < 16 {
+            let dt = dest.clone();
+            let r_f = real_file.clone();
+            let c_f = cut_file_name.clone();
+            thread::spawn(move||{
+                log::warn!("retry-->{}",retry);
+                thread::sleep(Duration::from_secs(1<<retry));
+                start_upload_inner(dt,&r_f,&c_f,retry);
+            });
+        }
+    };
     if let Ok(stream) = TcpStream::connect(&dest) {
         let (_reader, writer) = &mut (&stream, &stream);
         let mut open_option = OpenOptions::new();
@@ -452,7 +467,11 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
                 let file_info = FileInfo::new(file.metadata().unwrap().len(),String::from(cut_file_name.to_str().unwrap() ));
                 match writer.write_all(&(&file_info).to_vec()[..]) {
                     Ok(_) =>{
-                        writer.write_u8(0u8).unwrap();//协议行为标识--上传
+                        //协议行为标识--上传
+                        if let Err(e) = writer.write_u8(0u8) {
+                            do_retry();
+                            return;
+                        }
                         loop {
                             match file.read(&mut buffer[..]) {
                                 Ok(read_size) => {
@@ -465,32 +484,40 @@ pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name:
                                                 // thread::sleep(Duration::from_millis(limit_sleep_ms));
                                             }
                                             Err(e) => {
-                                                error!("error in write stream:{}", e.to_string())
+                                                error!("error in write stream:{}", e.to_string());
+                                                do_retry();
+                                                break;
                                             }
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    error!("error in read file:{}", e.to_string())
+                                    error!("error in read file:{}", e.to_string());
+                                    do_retry();
+                                    break;
                                 }
                             }
                         }
                     },
                     Err(e) => {
                         error!("error in write FileHeader:{}", e.to_string());
-
+                        do_retry();
                     }
                 }
 
             }
             Err(e) => {
-                error!("read file {:?} failed:{:?}", &real_file.display(), e.to_string())
+                error!("read file {:?} failed:{:?}", &real_file.display(), e.to_string());
+                do_retry();
             }
         }
     }else{
-        println!("error in connecting to {}",&dest);
+        error!("error in connecting to {}",&dest);
+        do_retry();
     };
-
+}
+pub fn start_upload(dest: String, real_file: &std::path::PathBuf, cut_file_name: &std::path::PathBuf) {
+    start_upload_inner(dest,real_file,cut_file_name,0);
 }
 
 // fn main() {
@@ -507,24 +534,30 @@ mod Test {
     use crate::{start_server,start_upload,FileInfo,start_remove};
     use std::path::PathBuf;
     use std::thread;
+    use std::time::Duration;
+
     #[test]
-    fn test_FileInfo() {
+    fn test_file_info() {
         env_logger::init();
         let file_info = FileInfo::new(2 * 1024 * 1024, String::from("thies is a test/with path/filename is.txt"));
         let result = file_info.to_vec();
-
-
-        let t1 = thread::spawn(||{
-            start_server("0.0.0.0:28081",PathBuf::from(r"c:\tools\upload"));
-        });
+        let worker_path = std::env::var("WORKER_PATH").unwrap_or("/tmp".to_owned());
+        //
+        // let t1 = thread::spawn(||{
+        //     start_server("0.0.0.0:28081",PathBuf::from(worker_path));
+        // });
         let t2 = thread::spawn(||{
-            start_upload(String::from("localhost:28081"),&PathBuf::from(r"c:\projects\sources_prod.tar"),&PathBuf::from(r"s-t01000-1\sources_prod.tar"));
-            start_remove(String::from("localhost:28081"),&PathBuf::from(r"s-t01000-1\sources_prod.tar"));
+            start_upload(String::from("localhost:8081"),&PathBuf::from("/opt/ssd_pool/filecoin-proof-parameters-v28.tar"),&PathBuf::from(r"cache/s-t01000-1/filecoin-proof-parameters-v28.tar"));
+            // start_remove(String::from("localhost:28081"),&PathBuf::from(r"cache/s-t01000-1/remove"));
+            loop {
+                thread::sleep(Duration::from_secs(1));
+            }
         });
         // let t2 = thread::spawn(||{
         //     start_remove(String::from("localhost:28081"),&PathBuf::from(r"s-t01000-1\lotus-master.tar"));
         // });
         t2.join();
-        t1.join();
+        thread::sleep(Duration::from_secs(2));
+        // t1.join();
     }
 }

@@ -1,10 +1,10 @@
 
 #[test]
 fn test01(){
-    let info = "";
-    if info==""{
-        println!("true")
-    }else {
-        println!("false")
+    env_logger::init();
+    log::trace!("init");
+    for n in 1..16 {
+        let x = 1 << n;
+        log::info!("2^{}={}",n,x);
     }
 }

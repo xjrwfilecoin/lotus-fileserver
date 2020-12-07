@@ -6,6 +6,8 @@ use std::thread;
 use std::path::PathBuf;
 use std::env;
 
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn main() {
     env_logger::init();
