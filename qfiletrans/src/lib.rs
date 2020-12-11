@@ -434,9 +434,13 @@ pub fn start_upload_inner(dest: String, real_file: &std::path::PathBuf, cut_file
             thread::sleep(Duration::from_secs(1<<retry));
             if false == r_f.exists() {
                 if let Ok(worker_path) = std::env::var("WORKER_PATH") {
+                    let mut root = PathBuf::from_str(&worker_path[..]).unwrap();
+                    if r_f.to_str().unwrap_or("").contains("/cache/"){
+                        root = root.join("cache");
+                    }
                     let file_name = r_f.file_name().unwrap();
                     let dir = r_f.parent().unwrap().file_name().unwrap();
-                    let real_file = PathBuf::from_str(&worker_path[..]).unwrap().join(dir).join(file_name);
+                    let real_file = root.join(dir).join(file_name);
                     if real_file.exists() {
                         start_upload_inner(dt,&real_file,&c_f,retry);
                     }
