@@ -31,10 +31,12 @@ use structopt::StructOpt;
 use rand::prelude::*;
 use std::io::{Read, Write, Cursor};
 use log::{info, error};
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions};
 use std::path::PathBuf;
 use std::process::Command;
+
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use std::str::FromStr;
 
 /// Search for a pattern in a file and display the lin that contain it.
 #[derive(StructOpt)]
@@ -120,62 +122,46 @@ impl From<&Vec<u8>> for FileInfo {
 
 pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
     let listener = TcpListener::bind(host).unwrap();
-    //  let mut incoming = listener.incoming();
+
+    let state = Arc::new(RwLock::new(0u64));
+    let state_read = state.clone();
+    thread::spawn(move||{
+        let mut offset = 0u64;
+        let mut step = 0u8;
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            {
+                let st = state_read.read().unwrap();
+                if step % 5 == 4 {
+                    let mut s = (*st - offset) as f64 / 1024.0f64;
+                    if s == 0f64 {
+                        continue;
+                    }
+                    let mut u = "KiB";
+                    if s > 1024f64 {
+                        u = "MiB";
+                        s = s / 1024.0;
+                    }
+                    if s > 1024f64 {
+                        u = "GiB";
+                        s = s / 1024.0;
+                    }
+
+                    log::trace!("speed: {}{}/s",s.ceil(),u);
+                    offset = *st;
+                    step = 0;
+                }
+            }
+            step += 1;
+        }
+    });
 
     let limit_sleep_ms = get_limit_sleep();
     log::info!("listen on:{},root:{}",host,parent_path.clone().to_str().unwrap());
-    let total_threads = Arc::new(Mutex::new(0));
     for stream in listener.incoming() {
         let parent_path = parent_path.clone();
-        let total_threads = total_threads.clone();
-
-        let state = Arc::new(RwLock::new(0u64));
-        let state_read = state.clone();
-        thread::spawn(move ||{
-            let mut offset = 0u64;
-            let mut step = 0u8;
-            loop {
-                thread::sleep(Duration::from_millis(200));
-                {
-                    let st = state_read.read().unwrap();
-                    if *st == u64::max_value() {
-                        break;
-                    }
-                    if step % 5 == 4 {
-                        let mut s = (*st - offset) as f64 / 1024.0f64;
-                        let mut u = "KiB";
-                        if s > 1024f64 {
-                            u = "MiB";
-                            s = s / 1024.0;
-                        }
-                        if s > 1024f64 {
-                            u = "GiB";
-                            s = s / 1024.0;
-                        }
-                        log::trace!("speed: {}{}/s",s.ceil(),u);
-                        offset = *st;
-                        step = 0;
-                    }
-                }
-                step += 1;
-            }
-        });
-        let add_len=move |len:usize| {
-            let mut st = state.write().unwrap();
-            if len > 0 {
-                *st += len as u64;
-            }
-            else{
-                *st = u64::max_value();
-            }
-        };
+        let state = state.clone();
         thread::spawn(move || {
-            {
-                let mut cnts = total_threads.lock().unwrap();
-                let cnts = cnts.deref_mut();
-                *cnts += 1;
-                log::trace!("incoming...all :{} thr",&cnts);
-            }
 
             let set_res = set_current_thread_priority(ThreadPriority::Min);
             if !set_res.is_ok()  {
@@ -214,7 +200,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                     let handler= reader.read_u8().unwrap();
                     if handler == 1 {
                         if let Err(e) = std::fs::remove_dir_all(file_name.parent().unwrap()){
-                            log::error!("remove_dir all,[{}]-->failed:{:?}",file_name.parent().unwrap().to_str().unwrap(),e);
+                            log::warn!("remove_dir all,[{}]-->failed:{:?}",file_name.parent().unwrap().to_str().unwrap(),e);
                         }
                         else{
                             let file_txt = format!("{}.txt",file_name.parent().unwrap().to_str().unwrap());
@@ -231,7 +217,6 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                                 };
                             };
                         };
-                        add_len(0);//结束标志
                         return;
                     }
                     if !std::path::Path::exists(file_name.parent().unwrap()) {
@@ -242,9 +227,13 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                             .expect(format!("failed to create cache path,{}",&file_name.parent().unwrap().to_str().unwrap()).as_str());
                     }
                     let mut open_option = OpenOptions::new();
-                    if let Ok(mut file) = open_option.write(true).create(true).open(&file_name) {
+                    if let Ok(mut file) = open_option.write(true)
+                        .create(true)
+                        .open(&file_name) {
                         let mut buffer = vec![0u8; buf_len];
                         let mut cur_read_offset = 0usize;
+
+                        // let ring = rio::new().expect("");
 
                         let file_len = file_info.file_len;
                         file.set_len(file_len);
@@ -253,7 +242,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                         loop {
                             match reader.read(&mut buffer[cur_read_offset..buf_len]) {
                                 Ok(read_size) => {
-                                    add_len(read_size);
+
                                     file_len += read_size as u64;
                                     if read_size == 0 {
                                         info!("read finished!");
@@ -263,7 +252,7 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                                                     error!("error in write file size unmatched:{}/{}", read_size, cur_read_offset);
                                                 }
                                                 let file_txt = format!("{}.txt",&file_name.parent().unwrap().to_str().unwrap());
-                                                info!("create file:{}",file_txt);
+                                                info!("uploaded file:{}",file_name.to_path_buf().to_str().unwrap());
                                                 //file.sync_data();
                                                 if file_len == file_info.file_len {
                                                     let mut file = OpenOptions::new()
@@ -285,6 +274,8 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
 
                                         break;
                                     }
+                                    let mut st = state.write().unwrap();
+                                    *st += read_size as u64;
                                     if cur_read_offset + read_size < buf_len {
                                         cur_read_offset += read_size;
                                     } else {
@@ -295,11 +286,8 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                                                     error!("error in write file size unmatched:{}/{}", read_size, cur_read_offset);
                                                     break;
                                                 }
-                                                let cnts = {
-                                                    let mut cnts = total_threads.lock().unwrap();
-                                                    *cnts.deref_mut()
-                                                };
-                                                thread::sleep(std::time::Duration::from_millis(limit_sleep_ms * cnts as u64));
+
+                                                thread::sleep(std::time::Duration::from_millis(limit_sleep_ms as u64));
                                                 //file.sync_data();
                                             }
                                             Err(e) => {
@@ -326,14 +314,6 @@ pub fn start_server(host:&str,parent_path: std::path::PathBuf) {
                 }
             }
 
-            {
-                let mut cnts = total_threads.lock().unwrap();
-                let cnts = cnts.deref_mut();
-                if *cnts > 0 {
-                    *cnts -= 1;
-                }
-                add_len(0);
-            }
         });
     }
 }
@@ -345,12 +325,12 @@ fn get_limit_sleep() -> u64 {
             match ms.parse::<u64>() {
                 Ok(v) => v,
                 Err(_e) => {
-                    400u64
+                    5u64
                 }
             }
         },
         Err(_e) => {
-            400u64
+            5u64
         }
     };
     limit_sleep_ms
@@ -446,15 +426,28 @@ pub fn start_upload_inner(dest: String, real_file: &std::path::PathBuf, cut_file
 
     let retry = retry + 1;
     let do_retry = || {
-        if retry < 16 {
+        if retry < 10 {
             let dt = dest.clone();
             let r_f = real_file.clone();
             let c_f = cut_file_name.clone();
-            thread::spawn(move||{
-                log::warn!("retry-->{}",retry);
-                thread::sleep(Duration::from_secs(1<<retry));
+            log::warn!("retry-->{}",retry);
+            thread::sleep(Duration::from_secs(1<<retry));
+            if false == r_f.exists() {
+                if let Ok(worker_path) = std::env::var("WORKER_PATH") {
+                    let file_name = r_f.file_name().unwrap();
+                    let dir = r_f.parent().unwrap().file_name().unwrap();
+                    let real_file = PathBuf::from_str(&worker_path[..]).unwrap().join(dir).join(file_name);
+                    if real_file.exists() {
+                        start_upload_inner(dt,&real_file,&c_f,retry);
+                    }
+                    else{
+                        log::error!("retry file not exists:{:?} or {:?}",r_f,real_file);
+                    }
+                }
+            }
+            else{
                 start_upload_inner(dt,&r_f,&c_f,retry);
-            });
+            }
         }
     };
     if let Ok(stream) = TcpStream::connect(&dest) {
